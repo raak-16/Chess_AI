@@ -1,6 +1,17 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { Chess } from "chess.js";
 import { Chessboard } from "react-chessboard";
+
+const API_BASE_URL = import.meta.env.VITE_API_URL || "http://localhost:5000";
+
+const THEME_COLORS = {
+  primary: "#ec5b13",
+  boardLight: "#f8f2ee",
+  boardDark: "#c96a3a",
+  selectedSquare: "rgba(236, 91, 19, 0.28)",
+  moveDot: "radial-gradient(circle, rgba(236, 91, 19, 0.35) 25%, transparent 25%)",
+  captureDot: "radial-gradient(circle, rgba(236, 91, 19, 0.45) 85%, transparent 85%)",
+};
 
 export default function GamePage() {
   const [game, setGame] = useState(new Chess());
@@ -9,6 +20,61 @@ export default function GamePage() {
   const [isAiThinking, setIsAiThinking] = useState(false);
   const [lastAiMove, setLastAiMove] = useState("--");
   const [optionSquares, setOptionSquares] = useState({});
+  const [pieceSquare, setPieceSquare] = useState("");
+  const gameEndRecordedRef = useRef(false);
+
+  const getElapsedSeconds = () => Math.max(0, 1200 - (whiteTime + blackTime));
+
+  async function recordGameResult(result, endedBy = "manual") {
+    const userName = localStorage.getItem("chess_user_name") || "guest";
+
+    try {
+      await fetch(`${API_BASE_URL}/api/games/record`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          user_name: userName,
+          result,
+          moves: game.history().length,
+          moves_uci: game.history({ verbose: true }).map((m) => m.from + m.to + (m.promotion || "")),
+          duration_seconds: getElapsedSeconds(),
+          ended_by: endedBy,
+        }),
+      });
+    } catch (error) {
+      console.warn("Failed to record game result:", error);
+    }
+  }
+
+  useEffect(() => {
+    if (gameEndRecordedRef.current) {
+      return;
+    }
+
+    let finalResult = null;
+    let endedBy = null;
+
+    if (game.isCheckmate()) {
+      // If it's white to move after checkmate, white got mated (user lost).
+      finalResult = game.turn() === "w" ? "Loss" : "Win";
+      endedBy = "checkmate";
+    } else if (game.isDraw()) {
+      finalResult = "Draw";
+      endedBy = "draw";
+    } else if (whiteTime === 0 || blackTime === 0) {
+      finalResult = whiteTime === 0 ? "Loss" : "Win";
+      endedBy = "timeout";
+    }
+
+    if (!finalResult) {
+      return;
+    }
+
+    gameEndRecordedRef.current = true;
+    void recordGameResult(finalResult, endedBy);
+  }, [game, whiteTime, blackTime]);
   const formatTime = (seconds) => {
     const m = Math.floor(seconds / 60).toString().padStart(2, "0");
     const s = (seconds % 60).toString().padStart(2, "0");
@@ -35,51 +101,102 @@ export default function GamePage() {
     if (game.turn() === "b" && !game.isGameOver()) {
       setIsAiThinking(true);
       const timer = setTimeout(() => {
-        makeRandomMove();
-        setIsAiThinking(false);
+        makeAiMove();
       }, 1000);
       return () => clearTimeout(timer);
     }
   }, [game]);
 
-  function makeRandomMove() {
-    const possibleMoves = game.moves();
-    if (game.isGameOver() || game.isDraw() || possibleMoves.length === 0) return;
+  async function makeAiMove() {
+    if (game.isGameOver() || game.isDraw()) {
+      setIsAiThinking(false);
+      return;
+    }
 
-    const randomIndex = Math.floor(Math.random() * possibleMoves.length);
-    const move = possibleMoves[randomIndex];
+    try {
+      const response = await fetch(`${API_BASE_URL}/move`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          moves: game.history({ verbose: true }).map((m) => m.from + m.to + (m.promotion || "")),
+          difficulty: 0,
+        }),
+      });
 
-    const gameCopy = new Chess();
-    gameCopy.loadPgn(game.pgn());
-    const aiMoveRes = gameCopy.move(move);
+      if (!response.ok) {
+        throw new Error(`Backend returned ${response.status}`);
+      }
 
-    if (aiMoveRes) {
+      const data = await response.json();
+      const predictedMove = data?.move;
+
+      if (!predictedMove || predictedMove.length < 4) {
+        throw new Error("Invalid move returned from backend");
+      }
+
+      const gameCopy = new Chess();
+      gameCopy.loadPgn(game.pgn());
+      const aiMoveRes = gameCopy.move({
+        from: predictedMove.slice(0, 2),
+        to: predictedMove.slice(2, 4),
+        promotion: predictedMove[4] || "q",
+      });
+
+      if (!aiMoveRes) {
+        throw new Error("Predicted move is illegal in current position");
+      }
+
       setGame(gameCopy);
       setLastAiMove(aiMoveRes.san);
+    } catch (error) {
+      console.warn("AI move fetch failed. Falling back to random move.", error);
+      const possibleMoves = game.moves();
+      if (possibleMoves.length > 0) {
+        const randomIndex = Math.floor(Math.random() * possibleMoves.length);
+        const fallbackMove = possibleMoves[randomIndex];
+        const gameCopy = new Chess();
+        gameCopy.loadPgn(game.pgn());
+        const aiMoveRes = gameCopy.move(fallbackMove);
+        if (aiMoveRes) {
+          setGame(gameCopy);
+          setLastAiMove(aiMoveRes.san);
+        }
+      }
+    } finally {
+      setIsAiThinking(false);
     }
+  }
+
+  function buildMoveObject(chessInstance, sourceSquare, targetSquare) {
+    const movingPiece = chessInstance.get(sourceSquare);
+    const isPawnPromotion =
+      movingPiece?.type === "p" && (targetSquare?.[1] === "8" || targetSquare?.[1] === "1");
+
+    const move = {
+      from: sourceSquare,
+      to: targetSquare,
+    };
+
+    if (isPawnPromotion) {
+      move.promotion = "q";
+    }
+
+    return move;
   }
 
   function onDrop(sourceSquare, targetSquare, piece) {
     if (game.turn() === "b") return false; // Not your turn!
 
     let moveRes = null;
-    let promo = "q";
-    if (piece && typeof piece === 'string' && piece.length >= 2) {
-      promo = piece[1].toLowerCase();
-    } else if (piece && piece.pieceType) {
-      promo = piece.pieceType[1] ? piece.pieceType[1].toLowerCase() : "q";
-    }
 
     try {
       // Test the move on a clone first to see if it's valid
       const gameCopy = new Chess();
       gameCopy.loadPgn(game.pgn());
       
-      moveRes = gameCopy.move({
-        from: sourceSquare,
-        to: targetSquare,
-        promotion: promo,
-      });
+      moveRes = gameCopy.move(buildMoveObject(gameCopy, sourceSquare, targetSquare));
 
       if (moveRes) {
         setGame(gameCopy);
@@ -108,7 +225,7 @@ export default function GamePage() {
     }
     
     if (moves.length === 0) {
-      setOptionSquares({ [square]: { background: "rgba(255, 255, 0, 0.4)" } });
+      setOptionSquares({ [square]: { background: THEME_COLORS.selectedSquare } });
       setPieceSquare(square);
       return false;
     }
@@ -118,12 +235,12 @@ export default function GamePage() {
       newSquares[move.to] = {
         background:
           game.get(move.to) && game.get(move.to).color !== piece.color
-            ? "radial-gradient(circle, rgba(0,0,0,.2) 85%, transparent 85%)"
-            : "radial-gradient(circle, rgba(0,0,0,.2) 25%, transparent 25%)",
+            ? THEME_COLORS.captureDot
+            : THEME_COLORS.moveDot,
         borderRadius: "50%",
       };
     });
-    newSquares[square] = { background: "rgba(255, 255, 0, 0.4)" };
+    newSquares[square] = { background: THEME_COLORS.selectedSquare };
     
     setOptionSquares(newSquares);
     setPieceSquare(square);
@@ -138,11 +255,7 @@ export default function GamePage() {
       try {
         const gameCopy = new Chess();
         gameCopy.loadPgn(game.pgn());
-        const moveRes = gameCopy.move({
-          from: pieceSquare,
-          to: square,
-          promotion: "q",
-        });
+        const moveRes = gameCopy.move(buildMoveObject(gameCopy, pieceSquare, square));
 
         if (moveRes) {
           setGame(gameCopy);
@@ -171,6 +284,7 @@ export default function GamePage() {
     setLastAiMove("--");
     setOptionSquares({});
     setPieceSquare("");
+    gameEndRecordedRef.current = false;
   }
 
   function restartGame() {
@@ -181,6 +295,13 @@ export default function GamePage() {
     setIsAiThinking(false);
     setOptionSquares({});
     setPieceSquare("");
+    gameEndRecordedRef.current = false;
+  }
+
+  async function resignGame() {
+    gameEndRecordedRef.current = true;
+    await recordGameResult("Loss", "resign");
+    restartGame();
   }
 
   // Get game status string
@@ -206,38 +327,20 @@ export default function GamePage() {
         {/* Left Column: Board + Clocks */}
         <div className="flex-1 flex flex-col items-center">
           <div 
-            className="w-full max-w-[600px] bg-slate-200 border-8 border-slate-800 dark:border-slate-900 rounded-xl overflow-hidden shadow-2xl relative"
-            onPointerDown={(e) => {
-              // Manually intercept clicks to bypass react-dnd / React 19 event swallowing
-              const squareEl = e.target.closest('[data-square]');
-              if (squareEl) {
-                const square = squareEl.getAttribute('data-square');
-                if (square) {
-                  onSquareClick(square);
-                }
-              }
-            }}
+            className="w-full max-w-[600px] bg-background-light border-8 border-primary/60 dark:border-primary/70 rounded-xl overflow-hidden shadow-2xl relative"
           >
             <Chessboard 
-              position={game.fen()} 
-              onPieceDrop={(args) => {
-                // To support both v3 (sourceSquare, targetSquare, piece) and v5 ({piece, sourceSquare, targetSquare})
-                let sourceSquare, targetSquare, piece;
-                if (args && args.sourceSquare && args.targetSquare) {
-                  sourceSquare = args.sourceSquare;
-                  targetSquare = args.targetSquare;
-                  piece = args.piece;
-                } else if (arguments.length >= 2) {
-                  sourceSquare = arguments[0];
-                  targetSquare = arguments[1];
-                  piece = arguments[2];
-                }
-                return onDrop(sourceSquare, targetSquare, piece);
+              options={{
+                position: game.fen(),
+                boardOrientation: "white",
+                onPieceDrop: ({ sourceSquare, targetSquare, piece }) =>
+                  onDrop(sourceSquare, targetSquare, piece),
+                onSquareClick: ({ square }) => onSquareClick(square),
+                squareStyles: { ...optionSquares },
+                darkSquareStyle: { backgroundColor: THEME_COLORS.boardDark },
+                lightSquareStyle: { backgroundColor: THEME_COLORS.boardLight },
+                allowDragging: game.turn() === "w" && !game.isGameOver(),
               }}
-              customSquareStyles={{ ...optionSquares }}
-              customDarkSquareStyle={{ backgroundColor: "#779556" }}
-              customLightSquareStyle={{ backgroundColor: "#ebecd0" }}
-              boardOrientation="white"
             />
           </div>
           
@@ -354,7 +457,7 @@ export default function GamePage() {
               <span className="material-symbols-outlined text-lg">undo</span>
               Undo
             </button>
-            <button onClick={restartGame} className="py-2.5 bg-slate-200 dark:bg-slate-700 hover:bg-red-100 dark:hover:bg-red-900/30 hover:text-red-600 dark:hover:text-red-400 text-slate-700 dark:text-slate-200 font-semibold rounded-xl transition-all flex items-center justify-center gap-2">
+            <button onClick={resignGame} className="py-2.5 bg-slate-200 dark:bg-slate-700 hover:bg-red-100 dark:hover:bg-red-900/30 hover:text-red-600 dark:hover:text-red-400 text-slate-700 dark:text-slate-200 font-semibold rounded-xl transition-all flex items-center justify-center gap-2">
               <span className="material-symbols-outlined text-lg">flag</span>
               Resign
             </button>

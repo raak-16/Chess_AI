@@ -3,9 +3,14 @@ import { Link, Outlet, useLocation } from "react-router-dom";
 export default function Layout() {
   const location = useLocation();
   const activePage = location.pathname;
-  
-  // Basic user simulation for this iteration
-  const userName = "Grandmaster";
+
+  const userName = localStorage.getItem("chess_user_name") || "Guest";
+  const isGuest = userName.toLowerCase() === "guest";
+
+  const handleLogout = () => {
+    localStorage.removeItem("chess_user_name");
+    window.location.href = "/login";
+  };
 
   const navItems = [
     { label: "Dashboard", endpoint: "/dashboard", active: activePage === "/dashboard" },
@@ -45,6 +50,24 @@ export default function Layout() {
             </nav>
 
             <div className="flex items-center gap-4">
+              {isGuest ? (
+                <div className="hidden sm:flex items-center gap-3">
+                  <Link className="text-sm font-semibold text-slate-600 hover:text-primary" to="/login">
+                    Login
+                  </Link>
+                  <Link className="text-sm font-semibold bg-primary/10 text-primary px-3 py-1.5 rounded-lg" to="/register">
+                    Register
+                  </Link>
+                </div>
+              ) : (
+                <button
+                  className="text-sm font-semibold text-slate-600 hover:text-primary"
+                  onClick={handleLogout}
+                  type="button"
+                >
+                  Logout
+                </button>
+              )}
               <button className="p-2 text-slate-500 hover:bg-slate-100 dark:hover:bg-primary/10 rounded-full">
                 <span className="material-symbols-outlined">notifications</span>
               </button>
