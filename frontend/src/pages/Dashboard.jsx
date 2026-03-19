@@ -6,7 +6,8 @@ export default function Dashboard() {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    fetch("/api/dashboard")
+    const userName = localStorage.getItem("chess_user_name") || "guest";
+    fetch(`/api/dashboard?user_name=${encodeURIComponent(userName)}`)
       .then((res) => res.json())
       .then((json) => {
         setData(json);
@@ -26,6 +27,43 @@ export default function Dashboard() {
     );
   }
 
+  const gamesPlayed = Number(data?.stats?.games_played || 0);
+  const wins = Number(data?.stats?.wins || 0);
+  const losses = Number(data?.stats?.losses || 0);
+  const draws = Number(data?.stats?.draws || 0);
+  const recentGames = Array.isArray(data?.recent_games) ? data.recent_games : [];
+  const winRate = gamesPlayed > 0 ? Math.round((wins / gamesPlayed) * 100) : 0;
+  const lossRate = gamesPlayed > 0 ? Math.round((losses / gamesPlayed) * 100) : 0;
+  const drawRate = gamesPlayed > 0 ? Math.round((draws / gamesPlayed) * 100) : 0;
+
+  const now = new Date();
+  const msPerDay = 24 * 60 * 60 * 1000;
+  const recentWeekCount = recentGames.filter((g) => {
+    const d = new Date(g.date);
+    return Number.isFinite(d.getTime()) && now - d <= 7 * msPerDay;
+  }).length;
+  const previousWeekCount = recentGames.filter((g) => {
+    const d = new Date(g.date);
+    const delta = now - d;
+    return Number.isFinite(d.getTime()) && delta > 7 * msPerDay && delta <= 14 * msPerDay;
+  }).length;
+  const weeklyDelta =
+    previousWeekCount > 0
+      ? Math.round(((recentWeekCount - previousWeekCount) / previousWeekCount) * 100)
+      : recentWeekCount > 0
+      ? 100
+      : 0;
+
+  const eloPoints = Array.isArray(data?.elo_points) ? data.elo_points : [];
+  const eloPercents = eloPoints.map((value) => Number.parseInt(String(value).replace("%", ""), 10) || 0);
+  const latestEloPercent = eloPercents.length > 0 ? eloPercents[eloPercents.length - 1] : 0;
+  const currentElo = Math.round(1200 + latestEloPercent * 8);
+  const monthLabelCount = Math.max(eloPoints.length, 1);
+  const monthLabels = Array.from({ length: monthLabelCount }, (_, idx) => {
+    const d = new Date(now.getFullYear(), now.getMonth() - (monthLabelCount - 1 - idx), 1);
+    return d.toLocaleString("en-US", { month: "short" });
+  });
+
   return (
     <div className="w-full max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
       <div className="mb-8">
@@ -43,26 +81,28 @@ export default function Dashboard() {
             <div className="bg-white dark:bg-slate-900/50 p-6 rounded-xl border border-slate-200 dark:border-primary/10 shadow-sm">
               <p className="text-sm font-medium text-slate-500 dark:text-slate-400 mb-1">Games Played</p>
               <p className="text-3xl font-bold">{data.stats.games_played}</p>
-              <div className="mt-2 text-xs text-emerald-600 font-medium flex items-center">
-                <span className="material-symbols-outlined text-xs mr-1">trending_up</span> +12% this week
+              <div className={`mt-2 text-xs font-medium flex items-center ${weeklyDelta >= 0 ? "text-emerald-600" : "text-rose-600"}`}>
+                <span className="material-symbols-outlined text-xs mr-1">{weeklyDelta >= 0 ? "trending_up" : "trending_down"}</span>
+                {weeklyDelta >= 0 ? "+" : ""}
+                {weeklyDelta}% vs prior week
               </div>
             </div>
             <div className="bg-white dark:bg-slate-900/50 p-6 rounded-xl border border-slate-200 dark:border-primary/10 shadow-sm">
               <p className="text-sm font-medium text-slate-500 dark:text-slate-400 mb-1">Wins</p>
               <p className="text-3xl font-bold text-primary">{data.stats.wins}</p>
-              <div className="mt-2 text-xs text-slate-400">Win rate: 50%</div>
+              <div className="mt-2 text-xs text-slate-400">Win rate: {winRate}%</div>
             </div>
             <div className="bg-white dark:bg-slate-900/50 p-6 rounded-xl border border-slate-200 dark:border-primary/10 shadow-sm">
               <p className="text-sm font-medium text-slate-500 dark:text-slate-400 mb-1">Losses</p>
               <p className="text-3xl font-bold">{data.stats.losses}</p>
               <div className="mt-2 text-xs text-rose-500 font-medium flex items-center">
-                <span className="material-symbols-outlined text-xs mr-1">trending_down</span> -4% improvement
+                <span className="material-symbols-outlined text-xs mr-1">analytics</span> Loss share: {lossRate}%
               </div>
             </div>
             <div className="bg-white dark:bg-slate-900/50 p-6 rounded-xl border border-slate-200 dark:border-primary/10 shadow-sm">
               <p className="text-sm font-medium text-slate-500 dark:text-slate-400 mb-1">Draws</p>
               <p className="text-3xl font-bold">{data.stats.draws}</p>
-              <div className="mt-2 text-xs text-slate-400">Stalemate: 17%</div>
+              <div className="mt-2 text-xs text-slate-400">Draw rate: {drawRate}%</div>
             </div>
           </div>
 
@@ -147,22 +187,21 @@ export default function Dashboard() {
           <div className="bg-white dark:bg-slate-900/50 rounded-xl border border-slate-200 dark:border-primary/10 p-6 shadow-sm">
             <h3 className="text-sm font-bold uppercase tracking-widest text-slate-500 mb-4">ELO Progression</h3>
             <div className="h-48 flex items-end gap-2 px-2">
-              {data.elo_points.map((height, idx) => (
+              {(eloPoints.length > 0 ? eloPoints : ["0%"]).map((height, idx) => (
                 <div key={idx} className={`flex-1 bg-primary/${(idx + 1) * 10} rounded-t-sm`} style={{ height }}></div>
               ))}
             </div>
             <div className="mt-4 flex justify-between text-xs text-slate-400">
-              <span>Jun</span>
-              <span>Jul</span>
-              <span>Aug</span>
-              <span>Sep</span>
-              <span>Oct</span>
-              <span className="text-primary font-bold">Now</span>
+              {monthLabels.map((label, idx) => (
+                <span key={label + idx} className={idx === monthLabels.length - 1 ? "text-primary font-bold" : ""}>
+                  {label}
+                </span>
+              ))}
             </div>
             <div className="mt-6 pt-6 border-t border-slate-100 dark:border-primary/10">
               <div className="flex justify-between items-center">
                 <span className="text-sm font-medium">Current ELO</span>
-                <span className="text-lg font-bold text-primary">2,145</span>
+                <span className="text-lg font-bold text-primary">{currentElo.toLocaleString()}</span>
               </div>
             </div>
           </div>

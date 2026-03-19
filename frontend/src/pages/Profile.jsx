@@ -6,7 +6,8 @@ export default function Profile() {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    fetch("/api/profile")
+    const userName = localStorage.getItem("chess_user_name") || "guest";
+    fetch(`/api/profile?user_name=${encodeURIComponent(userName)}`)
       .then((res) => res.json())
       .then((json) => {
         setData(json);

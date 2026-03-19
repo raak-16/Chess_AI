@@ -16,56 +16,31 @@ export default function LandingPage() {
       </div>
 
       <div className="w-full max-w-[440px] bg-white dark:bg-slate-900/50 rounded-2xl shadow-xl shadow-slate-200/50 dark:shadow-none border border-slate-200 dark:border-slate-800 p-8 md:p-10">
-        <div className="mb-8">
-          <h3 className="text-2xl font-bold text-slate-900 dark:text-slate-100">Welcome back</h3>
-          <p className="text-slate-500 dark:text-slate-400 text-sm">Sign in to continue your training</p>
+        <div className="mb-8 text-center">
+          <h3 className="text-2xl font-bold text-slate-900 dark:text-slate-100">Welcome to your training arena</h3>
+          <p className="text-slate-500 dark:text-slate-400 text-sm">Create your account or log in to sync profile data with MongoDB</p>
         </div>
 
-        <form className="space-y-5" onSubmit={(e) => { e.preventDefault(); window.location.href = '/dashboard'; }}>
-          <div>
-            <label className="block text-sm font-bold text-slate-700 dark:text-slate-300 mb-2" htmlFor="username">Username</label>
-            <div className="relative flex items-center">
-              <span className="material-symbols-outlined absolute left-4 text-slate-400 text-xl">person</span>
-              <input
-                className="w-full pl-11 pr-4 py-3.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/50 text-slate-900 dark:text-slate-100 focus:ring-2 focus:ring-primary/20 focus:border-primary transition-all outline-none"
-                id="username"
-                name="username"
-                placeholder="Enter your username"
-                type="text"
-              />
-            </div>
-          </div>
-
-          <div>
-            <div className="flex justify-between items-center mb-2">
-              <label className="block text-sm font-bold text-slate-700 dark:text-slate-300" htmlFor="password">Password</label>
-              <a className="text-xs font-semibold text-primary hover:underline" href="#">Forgot?</a>
-            </div>
-            <div className="relative flex items-center">
-              <span className="material-symbols-outlined absolute left-4 text-slate-400 text-xl">lock</span>
-              <input
-                className="w-full pl-11 pr-4 py-3.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/50 text-slate-900 dark:text-slate-100 focus:ring-2 focus:ring-primary/20 focus:border-primary transition-all outline-none"
-                id="password"
-                name="password"
-                placeholder="........"
-                type="password"
-              />
-            </div>
-          </div>
-
-          <button
-            className="w-full py-4 bg-primary hover:bg-primary/90 text-white font-bold rounded-xl shadow-lg shadow-primary/25 transition-all transform hover:-translate-y-0.5 active:scale-[0.98]"
-            type="submit"
+        <div className="space-y-4">
+          <Link
+            className="block w-full py-4 text-center bg-primary hover:bg-primary/90 text-white font-bold rounded-xl shadow-lg shadow-primary/25 transition-all"
+            to="/login"
           >
-            Sign In to Board
-          </button>
-        </form>
+            Login
+          </Link>
+          <Link
+            className="block w-full py-4 text-center bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-900 dark:text-slate-100 font-bold rounded-xl transition-all"
+            to="/register"
+          >
+            Register
+          </Link>
+        </div>
 
         <div className="mt-8 pt-6 border-t border-slate-100 dark:border-slate-800 text-center">
           <p className="text-sm text-slate-600 dark:text-slate-400">
-            Don't have an account?{" "}
-            <Link className="text-primary font-bold hover:underline" to="/dashboard">
-              Enter demo dashboard
+            Existing user?{" "}
+            <Link className="text-primary font-bold hover:underline" to="/login">
+              Continue to login
             </Link>
           </p>
         </div>
