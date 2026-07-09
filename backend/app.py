@@ -611,6 +611,7 @@ def _check_model_move_with_stockfish(
     best_score = _score_for_turn(best_info, turn)
     model_score = _score_for_turn(model_info, turn)
     centipawn_loss = max(0, best_score - model_score)
+    pawn_loss = round(centipawn_loss / 100, 2)
     use_model_move = centipawn_loss <= MODEL_MAX_CENTIPAWN_LOSS
 
     return {
@@ -618,9 +619,26 @@ def _check_model_move_with_stockfish(
         "model_move": model_move_uci,
         "stockfish_move": best_move.uci(),
         "centipawn_loss": centipawn_loss,
+        "pawn_loss": pawn_loss,
         "threshold": MODEL_MAX_CENTIPAWN_LOSS,
         "source": "model" if use_model_move else "stockfish",
     }
+
+
+def _log_move_decision(decision: dict) -> None:
+    pawn_loss = decision.get("pawn_loss")
+    pawn_loss_label = f"{float(pawn_loss):.2f}" if pawn_loss is not None else "unavailable"
+    print(
+        "AI move decision"
+        f" | source={decision.get('source')}"
+        f" | selected={decision.get('move')}"
+        f" | model={decision.get('model_move', 'unavailable')}"
+        f" | stockfish={decision.get('stockfish_move', 'unavailable')}"
+        f" | centipawn_loss={decision.get('centipawn_loss', 'unavailable')}"
+        f" | pawn_loss={pawn_loss_label}"
+        f" | threshold_cp={decision.get('threshold', MODEL_MAX_CENTIPAWN_LOSS)}",
+        flush=True,
+    )
 
 
 @app.get("/")
@@ -800,7 +818,9 @@ def get_move():
 
     if model_move is not None:
         try:
-            return jsonify(_check_model_move_with_stockfish(board, model_move))
+            decision = _check_model_move_with_stockfish(board, model_move)
+            _log_move_decision(decision)
+            return jsonify(decision)
         except Exception as exc:
             print(f"Stockfish validation failed: {exc}")
             return jsonify({
@@ -814,18 +834,22 @@ def get_move():
         with _STOCKFISH_LOCK:
             engine = _get_stockfish_engine()
             result = engine.play(board, chess.engine.Limit(depth=STOCKFISH_DEPTH))
-        return jsonify({
+        decision = {
             "move": result.move.uci(),
             "stockfish_move": result.move.uci(),
             "source": "stockfish",
-        })
+        }
+        _log_move_decision(decision)
+        return jsonify(decision)
     except Exception as exc:
         print(f"Stockfish fallback failed: {exc}")
         try:
             move = _fallback_move(board)
         except ValueError as fallback_exc:
             return jsonify({"detail": str(fallback_exc)}), 400
-        return jsonify({"move": move, "source": "legal_fallback"})
+        decision = {"move": move, "source": "legal_fallback"}
+        _log_move_decision(decision)
+        return jsonify(decision)
 
 
 @app.post("/api/games/record")
