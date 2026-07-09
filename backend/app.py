@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 import os
+import shutil
 from io import StringIO
 from datetime import UTC, datetime
+from threading import Lock
 from urllib.parse import quote_plus
 
 import chess
+import chess.engine
 import chess.pgn
 import torch
 from flask import Flask, jsonify, request, Response
@@ -17,7 +20,27 @@ from werkzeug.security import check_password_hash, generate_password_hash
 
 
 app = Flask(__name__)
-CORS(app, resources={r"/*": {"origins": ["http://localhost:5173"]}})
+
+# Configure CORS to allow requests from both development and production frontends
+allowed_origins = [
+    "http://localhost:5173",  # Local development
+    "http://localhost:3000",   # Alternative local dev
+    "https://chess-ai-2-35h2.onrender.com",  # Production frontend
+    os.getenv("ALLOWED_ORIGIN", "").split(",") if os.getenv("ALLOWED_ORIGIN") else []
+]
+# Flatten the list and remove empty strings
+allowed_origins = [origin.strip() for origins in allowed_origins for origin in (origins if isinstance(origins, list) else [origins]) if origin.strip()]
+
+CORS(
+    app,
+    resources={r"/*": {
+        "origins": allowed_origins,
+        "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+        "allow_headers": ["Content-Type", "Authorization"],
+        "supports_credentials": True,
+        "max_age": 3600
+    }}
+)
 
 
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
@@ -25,8 +48,26 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 MONGODB_URI_TEMPLATE = "mongodb+srv://n8nconnection:{db_password}@cluster0.br6jjhc.mongodb.net/?appName=Cluster0"
 MONGODB_DB_NAME = os.getenv("MONGODB_DB_NAME", "chess_db")
 
+
+def _get_int_env(name: str, default: int, minimum: int = 0) -> int:
+    try:
+        return max(minimum, int(os.getenv(name, str(default))))
+    except ValueError:
+        print(f"Invalid {name}; using default value {default}")
+        return default
+
+
+STOCKFISH_PATH = os.getenv("STOCKFISH_PATH") or shutil.which("stockfish")
+STOCKFISH_DEPTH = _get_int_env("STOCKFISH_DEPTH", 12, minimum=1)
+MODEL_MAX_CENTIPAWN_LOSS = _get_int_env(
+    "MODEL_MAX_CENTIPAWN_LOSS",
+    50,
+)
+
 _MONGO_CLIENT = None
 _MONGO_DB = None
+_STOCKFISH_ENGINE = None
+_STOCKFISH_LOCK = Lock()
 
 
 def _resolve_model_dir() -> str:
@@ -50,7 +91,7 @@ def _build_mongodb_uri() -> str | None:
     if mongodb_uri:
         return mongodb_uri
 
-    db_password = "yoyoHoney123"
+    db_password = os.getenv("MONGODB_PASSWORD")
     if db_password:
         return MONGODB_URI_TEMPLATE.replace("{db_password}", quote_plus(db_password))
 
@@ -523,6 +564,64 @@ def _fallback_move(board: chess.Board) -> str:
     return legal[0].uci()
 
 
+def _get_stockfish_engine() -> chess.engine.SimpleEngine:
+    global _STOCKFISH_ENGINE
+
+    if _STOCKFISH_ENGINE is None:
+        if not STOCKFISH_PATH:
+            raise RuntimeError(
+                "Stockfish is not installed. Set STOCKFISH_PATH to the engine binary."
+            )
+        _STOCKFISH_ENGINE = chess.engine.SimpleEngine.popen_uci(STOCKFISH_PATH)
+    return _STOCKFISH_ENGINE
+
+
+def _score_for_turn(info: dict, turn: chess.Color) -> int:
+    score = info.get("score")
+    if score is None:
+        raise RuntimeError("Stockfish did not return a position score")
+    # Treat a forced mate as a very large centipawn score so the gate always
+    # rejects a model move that throws away mate.
+    value = score.pov(turn).score(mate_score=100_000)
+    if value is None:
+        raise RuntimeError("Stockfish returned an unusable position score")
+    return value
+
+
+def _check_model_move_with_stockfish(
+    board: chess.Board,
+    model_move_uci: str,
+) -> dict:
+    model_move = chess.Move.from_uci(model_move_uci)
+    if model_move not in board.legal_moves:
+        raise ValueError(f"Model returned an illegal move: {model_move_uci}")
+
+    limit = chess.engine.Limit(depth=STOCKFISH_DEPTH)
+    turn = board.turn
+
+    # SimpleEngine is not thread-safe. One lock also prevents concurrent
+    # requests from interleaving commands with the shared engine process.
+    with _STOCKFISH_LOCK:
+        engine = _get_stockfish_engine()
+        best_info = engine.analyse(board, limit)
+        model_info = engine.analyse(board, limit, root_moves=[model_move])
+
+    best_move = best_info["pv"][0]
+    best_score = _score_for_turn(best_info, turn)
+    model_score = _score_for_turn(model_info, turn)
+    centipawn_loss = max(0, best_score - model_score)
+    use_model_move = centipawn_loss <= MODEL_MAX_CENTIPAWN_LOSS
+
+    return {
+        "move": model_move_uci if use_model_move else best_move.uci(),
+        "model_move": model_move_uci,
+        "stockfish_move": best_move.uci(),
+        "centipawn_loss": centipawn_loss,
+        "threshold": MODEL_MAX_CENTIPAWN_LOSS,
+        "source": "model" if use_model_move else "stockfish",
+    }
+
+
 @app.get("/")
 def health():
     return jsonify({
@@ -530,6 +629,9 @@ def health():
         "model": "vishy_trans",
         "device": DEVICE,
         "model_loaded": TOKENIZER is not None and MODEL is not None,
+        "stockfish_configured": bool(STOCKFISH_PATH),
+        "stockfish_depth": STOCKFISH_DEPTH,
+        "model_max_centipawn_loss": MODEL_MAX_CENTIPAWN_LOSS,
     })
 
 
@@ -689,16 +791,40 @@ def get_move():
     if board.is_game_over():
         return jsonify({"detail": "Game is already over"}), 400
 
+    model_move = None
     try:
-        move = _select_move_with_model(board, moves, difficulty)
+        model_move = _select_move_with_model(board, moves, difficulty)
     except Exception as exc:
-        print(f"Model inference failed, using fallback move: {exc}")
+        print(f"Model inference failed: {exc}")
+
+    if model_move is not None:
+        try:
+            return jsonify(_check_model_move_with_stockfish(board, model_move))
+        except Exception as exc:
+            print(f"Stockfish validation failed: {exc}")
+            return jsonify({
+                "detail": "Stockfish could not validate the model move",
+                "error": str(exc),
+            }), 503
+
+    # If model inference fails, ask Stockfish directly before using the basic
+    # legal-move fallback.
+    try:
+        with _STOCKFISH_LOCK:
+            engine = _get_stockfish_engine()
+            result = engine.play(board, chess.engine.Limit(depth=STOCKFISH_DEPTH))
+        return jsonify({
+            "move": result.move.uci(),
+            "stockfish_move": result.move.uci(),
+            "source": "stockfish",
+        })
+    except Exception as exc:
+        print(f"Stockfish fallback failed: {exc}")
         try:
             move = _fallback_move(board)
         except ValueError as fallback_exc:
             return jsonify({"detail": str(fallback_exc)}), 400
-
-    return jsonify({"move": move})
+        return jsonify({"move": move, "source": "legal_fallback"})
 
 
 @app.post("/api/games/record")

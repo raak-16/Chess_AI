@@ -1,0 +1,15 @@
+services:
+  - type: web
+    name: chess-ai-backend
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    healthCheckPath: /
+    envVars:
+      - key: MODEL_MAX_CENTIPAWN_LOSS
+        value: "50"
+      - key: STOCKFISH_DEPTH
+        value: "12"
+      - key: ALLOWED_ORIGIN
+        sync: false
+      - key: MONGODB_URI
+        sync: false
