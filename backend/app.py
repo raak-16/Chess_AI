@@ -26,6 +26,7 @@ allowed_origins = [
     "http://localhost:5173",  # Local development
     "http://localhost:3000",   # Alternative local dev
     "https://chess-ai-2-35h2.onrender.com",  # Production frontend
+    "https://chess-ai-frontend-pi.vercel.app",  # Vercel production frontend
     os.getenv("ALLOWED_ORIGIN", "").split(",") if os.getenv("ALLOWED_ORIGIN") else []
 ]
 # Flatten the list and remove empty strings
