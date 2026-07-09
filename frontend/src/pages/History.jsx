@@ -1,6 +1,8 @@
 import { useState, useEffect } from "react";
 import { Link } from "react-router-dom";
 
+const API_BASE_URL = import.meta.env.VITE_API_URL || "http://localhost:5000";
+
 export default function History() {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -8,7 +10,7 @@ export default function History() {
   const downloadPgn = async (gameId) => {
     const userName = localStorage.getItem("chess_user_name") || "guest";
     try {
-      const response = await fetch(`/api/history/${gameId}/pgn?user_name=${encodeURIComponent(userName)}`);
+      const response = await fetch(`${API_BASE_URL}/api/history/${gameId}/pgn?user_name=${encodeURIComponent(userName)}`);
       if (!response.ok) {
         const payload = await response.json().catch(() => ({}));
         throw new Error(payload?.detail || "Failed to export PGN");
@@ -31,7 +33,7 @@ export default function History() {
 
   useEffect(() => {
     const userName = localStorage.getItem("chess_user_name") || "guest";
-    fetch(`/api/history?user_name=${encodeURIComponent(userName)}`)
+    fetch(`${API_BASE_URL}/api/history?user_name=${encodeURIComponent(userName)}`)
       .then((res) => res.json())
       .then((json) => {
         setData(json);

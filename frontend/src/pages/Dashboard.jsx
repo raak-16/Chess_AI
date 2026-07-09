@@ -1,13 +1,15 @@
 import { useState, useEffect } from "react";
 import { Link } from "react-router-dom";
 
+const API_BASE_URL = import.meta.env.VITE_API_URL || "http://localhost:5000";
+
 export default function Dashboard() {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     const userName = localStorage.getItem("chess_user_name") || "guest";
-    fetch(`/api/dashboard?user_name=${encodeURIComponent(userName)}`)
+    fetch(`${API_BASE_URL}/api/dashboard?user_name=${encodeURIComponent(userName)}`)
       .then((res) => res.json())
       .then((json) => {
         setData(json);
